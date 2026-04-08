@@ -31,7 +31,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Validate workspace metadata
-        run: python3 scripts/validate_workspace_metadata.py
+        run: python3 scripts/validate_workspace_metadata.py --strict
 
       - name: Compile (deny warnings)
         run: RUSTFLAGS='-D warnings' cargo check --workspace --all-targets

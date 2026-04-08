@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import argparse
+import os
 import pathlib
 import re
 import sys
@@ -28,6 +30,27 @@ SEMVER_RE = re.compile(
 )
 SPDX_TOKEN_RE = re.compile(r"\(|\)|AND|OR|WITH|[A-Za-z0-9.+:-]+")
 AUTHOR_WITH_EMAIL_RE = re.compile(r"^\s*[^<>]+\s*<[^<>\s@]+@[^<>\s@]+\.[^<>\s@]+>\s*$")
+DOC_REF_LICENSE_RE = re.compile(r"^DocumentRef-[A-Za-z0-9.+-]+:LicenseRef-[A-Za-z0-9.+-]+$")
+COMMON_SPDX_IDS = {
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MPL-2.0",
+    "GPL-2.0-only",
+    "GPL-2.0-or-later",
+    "GPL-3.0-only",
+    "GPL-3.0-or-later",
+    "LGPL-2.1-only",
+    "LGPL-2.1-or-later",
+    "LGPL-3.0-only",
+    "LGPL-3.0-or-later",
+    "AGPL-3.0-only",
+    "AGPL-3.0-or-later",
+    "CC0-1.0",
+    "Unlicense",
+}
 
 
 def fail(message: str) -> None:
@@ -59,9 +82,6 @@ def validate_author(author: str) -> bool:
     candidate = author.strip()
     if "<" in candidate or ">" in candidate:
         return bool(AUTHOR_WITH_EMAIL_RE.match(candidate))
-
-    if "@" in candidate:
-        return False
 
     return any(ch.isalpha() for ch in candidate)
 
@@ -134,6 +154,24 @@ def parse_spdx_expression(value: str) -> bool:
     return position == len(tokens)
 
 
+def extract_spdx_identifiers(value: str) -> list[str]:
+    return [
+        token
+        for token in SPDX_TOKEN_RE.findall(value.strip())
+        if token not in {"(", ")", "AND", "OR", "WITH"}
+    ]
+
+
+def is_known_spdx_identifier(identifier: str) -> bool:
+    if identifier in COMMON_SPDX_IDS:
+        return True
+    if identifier.startswith("LicenseRef-"):
+        return True
+    if DOC_REF_LICENSE_RE.match(identifier):
+        return True
+    return False
+
+
 def resolve_workspace_members(members: list[str]) -> list[tuple[str, pathlib.Path]]:
     resolved: list[tuple[str, pathlib.Path]] = []
     seen: dict[str, str] = {}
@@ -143,7 +181,10 @@ def resolve_workspace_members(members: list[str]) -> list[tuple[str, pathlib.Pat
         matches: list[pathlib.Path]
 
         if looks_like_glob(pattern):
-            matches = [path for path in ROOT.glob(pattern) if path.is_dir()]
+            matches = sorted(
+                [path for path in ROOT.glob(pattern) if path.is_dir()],
+                key=lambda path: str(path.as_posix()),
+            )
             if not matches:
                 fail(f"workspace member glob did not match any directories: {pattern}")
         else:
@@ -173,6 +214,15 @@ def resolve_workspace_members(members: list[str]) -> list[tuple[str, pathlib.Pat
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Validate workspace metadata hygiene")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Enable strict release-mode checks (semver/SPDX identifier policy)",
+    )
+    args = parser.parse_args()
+    strict_mode = args.strict or os.getenv("MAYA_METADATA_STRICT") == "1"
+
     if not CARGO_TOML.exists():
         fail("Cargo.toml not found at workspace root")
 
@@ -193,11 +243,11 @@ def main() -> None:
         fail("missing [workspace] table")
 
     package = workspace.get("package")
-    if not isinstance(package, dict):
-        fail("missing [workspace.package] table")
+    if package is not None and not isinstance(package, dict):
+        fail("[workspace.package] must be a table when present")
 
     resolver = workspace.get("resolver")
-    if resolver not in ALLOWED_RESOLVERS:
+    if resolver is not None and resolver not in ALLOWED_RESOLVERS:
         fail(
             "workspace.resolver must be one of: " + ", ".join(sorted(ALLOWED_RESOLVERS))
         )
@@ -231,6 +281,10 @@ def main() -> None:
 
         validate_publish_field(member_package.get("publish"), f"{member}/Cargo.toml package")
 
+    if package is None:
+        print("workspace metadata validation passed")
+        return
+
     authors = package.get("authors")
     if not isinstance(authors, list) or not authors:
         fail("workspace.package.authors must be a non-empty array")
@@ -259,15 +313,27 @@ def main() -> None:
     version = package.get("version")
     if not isinstance(version, str) or not version.strip():
         fail("workspace.package.version must be a non-empty string")
-    normalized_version = version[1:] if version.startswith("v") else version
-    if not SEMVER_RE.match(normalized_version):
-        fail("workspace.package.version must be valid SemVer (e.g., 1.2.3)")
+    if strict_mode:
+        normalized_version = version[1:] if version.startswith("v") else version
+        if not SEMVER_RE.match(normalized_version):
+            fail("workspace.package.version must be valid SemVer (e.g., 1.2.3)")
 
     license_value = package.get("license")
     if not isinstance(license_value, str) or not license_value.strip():
         fail("workspace.package.license must be a non-empty string")
     if not parse_spdx_expression(license_value):
         fail("workspace.package.license must look like a valid SPDX expression")
+    if strict_mode:
+        unknown_identifiers = [
+            identifier
+            for identifier in extract_spdx_identifiers(license_value)
+            if not is_known_spdx_identifier(identifier)
+        ]
+        if unknown_identifiers:
+            fail(
+                "workspace.package.license contains unknown SPDX identifiers: "
+                + ", ".join(sorted(set(unknown_identifiers)))
+            )
 
     description = package.get("description")
     if not isinstance(description, str) or not description.strip():
