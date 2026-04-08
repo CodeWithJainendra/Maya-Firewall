@@ -1,0 +1,28 @@
+[package]
+name = "maya-crypto"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Post-Quantum Cryptography Engine - Kyber KEM, Dilithium Signatures, AES-256-GCM"
+
+[features]
+default = []
+oqs = ["dep:oqs"]
+
+[dependencies]
+maya-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+ring = { workspace = true }
+rand = { workspace = true }
+sha2 = { workspace = true }
+aes-gcm = { workspace = true }
+x25519-dalek = { workspace = true }
+ed25519-dalek = { workspace = true }
+hex = { workspace = true }
+base64 = { workspace = true }
+uuid = { workspace = true }
+oqs = { version = "0.10", optional = true }

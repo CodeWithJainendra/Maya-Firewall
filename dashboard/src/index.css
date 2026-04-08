@@ -1,0 +1,72 @@
+@import "tailwindcss";
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Outfit:wght@300;400;600;700&display=swap');
+@import './App.css';
+
+:root {
+  --bg-deep: #030712;
+  --bg-card: #0b1320;
+  --accent: #00e5ff;
+  --accent-glow: rgba(0, 229, 255, 0.24);
+  --danger: #ff4d6d;
+  --success: #34d399;
+  --text-main: #edf6ff;
+  --text-soft: #a6b6ca;
+  --text-muted: #70839a;
+  --border: rgba(148, 163, 184, 0.14);
+  --font-mono: 'JetBrains Mono', monospace;
+  --font-ui: 'Outfit', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+*::selection {
+  background: rgba(0, 229, 255, 0.22);
+  color: #ffffff;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--bg-deep);
+  color: var(--text-main);
+  font-family: var(--font-ui);
+  overflow-x: hidden;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-weight: 600;
+}

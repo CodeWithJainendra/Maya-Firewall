@@ -1,0 +1,16 @@
+[package]
+name = "maya-network-ebpf"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+description = "eBPF/XDP ingress program for Project MAYA"
+
+[dependencies]
+aya-ebpf = "0.1.1"
+
+[[bin]]
+name = "maya-network-ebpf"
+path = "src/main.rs"
+
+[workspace]

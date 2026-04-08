@@ -1,0 +1,119 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/maya-core",
+    "crates/maya-network",
+    "crates/maya-deception",
+    "crates/maya-ai",
+    "crates/maya-sandbox",
+    "crates/maya-crypto",
+    "crates/maya-consensus",
+    "crates/maya-profiler",
+    "crates/maya-dashboard",
+    "crates/maya-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["CDIS IIT Kanpur - Project MAYA"]
+license = "MIT"
+description = "AI-powered Dynamic Deception Engine - Active Cyber Defense Grid"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.45", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Logging & Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Networking
+hyper = { version = "1.6", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+axum = { version = "0.8", features = ["ws", "macros"] }
+tower = { version = "0.5", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+
+# Crypto
+ring = "0.17"
+rand = "0.9"
+sha2 = "0.10"
+aes-gcm = "0.10"
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# UUID
+uuid = { version = "1.16", features = ["v4", "serde"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# HTTP Client
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# Async channels
+crossbeam = "0.8"
+
+# Process management
+nix = { version = "0.29", features = ["process", "signal", "net"] }
+
+# Container management
+bollard = "0.18"
+
+# Byte manipulation
+bytes = "1.10"
+
+# Hex encoding
+hex = "0.4"
+
+# Base64
+base64 = "0.22"
+
+# Dashmap for concurrent hashmaps
+dashmap = "6.1"
+
+# WASM runtime
+wasmtime = "31.0"
+
+# Regex
+regex = "1.11"
+
+# Fake data generation
+fake = { version = "3.1", features = ["derive"] }
+
+# Tera templating
+tera = "1.20"
+
+# Workspace crates
+maya-core = { path = "crates/maya-core" }
+maya-network = { path = "crates/maya-network" }
+maya-deception = { path = "crates/maya-deception" }
+maya-ai = { path = "crates/maya-ai" }
+maya-sandbox = { path = "crates/maya-sandbox" }
+maya-crypto = { path = "crates/maya-crypto" }
+maya-consensus = { path = "crates/maya-consensus" }
+maya-profiler = { path = "crates/maya-profiler" }
+maya-dashboard = { path = "crates/maya-dashboard" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+opt-level = 3

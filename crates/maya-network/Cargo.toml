@@ -1,0 +1,27 @@
+[package]
+name = "maya-network"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "XDP/eBPF Network Engine - Kernel-level packet interception and manipulation"
+
+[features]
+default = []
+xdp = ["dep:aya"]
+
+[dependencies]
+maya-core = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+bytes = { workspace = true }
+dashmap = { workspace = true }
+nix = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+crossbeam = { workspace = true }
+rand = { workspace = true }
+aya = { version = "0.13", optional = true }

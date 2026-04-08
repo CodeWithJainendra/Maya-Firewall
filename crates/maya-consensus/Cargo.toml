@@ -1,0 +1,22 @@
+[package]
+name = "maya-consensus"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "HotStuff BFT Consensus Engine - Distributed decoy coordination with Byzantine fault tolerance"
+
+[dependencies]
+maya-core = { workspace = true }
+maya-crypto = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+dashmap = { workspace = true }
+crossbeam = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }

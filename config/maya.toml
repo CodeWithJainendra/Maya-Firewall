@@ -1,0 +1,81 @@
+# Project MAYA — Default Configuration
+# Active Deception Grid
+# CDIS, IIT Kanpur
+
+[system]
+node_id = "maya-node-001"
+data_dir = "/var/lib/maya"
+log_level = "info"
+max_sessions = 1000
+enabled = true
+
+[network]
+interface = "eth0"
+xdp_strict = true
+monitored_ports = [22, 80, 443, 3306, 5432, 8080, 8443, 3389, 445, 502]
+max_pps = 100000
+packet_capture = true
+decoy_subnet = "10.13.37.0/24"
+dns_intercept = true
+
+[deception]
+max_decoys = 500
+container_runtime = "gvisor"
+base_images = [
+    "maya/linux-decoy:latest",
+    "maya/windows-decoy:latest",
+    "maya/db-decoy:latest",
+    "maya/scada-decoy:latest",
+]
+auto_spawn = true
+decoy_ttl_secs = 3600
+spawn_budget_ms = 50
+
+[ai]
+llm_endpoint = "http://127.0.0.1:11434"
+model_name = "llama3:8b-instruct"
+max_context_tokens = 8192
+temperature = 0.3
+rag_enabled = true
+timeout_secs = 30
+
+[sandbox]
+runtime = "wasmtime"
+max_exec_time_secs = 60
+max_memory_mb = 256
+samples_dir = "/var/lib/maya/samples"
+c2_extraction = true
+entropy_analysis = true
+
+[crypto]
+kem_algorithm = "kyber768"
+sig_algorithm = "ed25519_hybrid"
+key_rotation_hours = 24
+hybrid_mode = true
+private_key_path = "/var/lib/maya/keys/node.key"
+cert_path = "/var/lib/maya/keys/node.cert"
+
+[consensus]
+protocol = "hotstuff"
+peers = [
+    { node_id = "maya-node-002", address = "10.0.0.12:7000", public_key = "REPLACE_WITH_PEER_PUBLIC_KEY_HEX" },
+    { node_id = "maya-node-003", address = "10.0.0.13:7000", public_key = "REPLACE_WITH_PEER_PUBLIC_KEY_HEX" },
+]
+quorum_size = 2
+view_timeout_ms = 5000
+max_batch_size = 100
+
+[profiler]
+keystroke_analysis = true
+mouse_tracking = false
+ttp_db_path = "/var/lib/maya/ttp.db"
+attribution_threshold = 0.75
+cert_in_reporting = false
+
+[dashboard]
+listen_addr = "0.0.0.0"
+listen_port = 8900
+websocket_enabled = true
+allowed_origins = ["https://soc.example.com"]
+auth_token = "CHANGE_ME_STRONG_DASHBOARD_TOKEN"
+assets_dir = "./dashboard/dist"
