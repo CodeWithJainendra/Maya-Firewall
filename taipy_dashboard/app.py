@@ -6,8 +6,49 @@ import pandas as pd
 import requests
 from taipy.gui import Gui
 
-API_BASE = os.getenv("MAYA_API_BASE", "http://127.0.0.1:8900")
-DASHBOARD_TOKEN = os.getenv("MAYA_DASHBOARD_TOKEN")
+
+def env_first(*names, default=None):
+    for name in names:
+        value = os.getenv(name)
+        if value is not None and value != "":
+            return value
+    return default
+
+
+def env_bool(*names, default=False):
+    raw = env_first(*names)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_float(*names, default=2.0):
+    raw = env_first(*names)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def env_int(*names, default):
+    raw = env_first(*names)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+API_BASE = env_first("MAYA_TAIPY_API_BASE", "MAYA_API_BASE", default="http://127.0.0.1:8900")
+DASHBOARD_TOKEN = env_first("MAYA_TAIPY_DASHBOARD_TOKEN", "MAYA_DASHBOARD_TOKEN")
+REQUEST_TIMEOUT_SECS = env_float("MAYA_TAIPY_REQUEST_TIMEOUT_SECS", default=2.0)
+TAIPY_HOST = env_first("MAYA_TAIPY_HOST", default="127.0.0.1")
+TAIPY_PORT = env_int("MAYA_TAIPY_PORT", default=5000)
+TAIPY_DARK_MODE = env_bool("MAYA_TAIPY_DARK_MODE", default=True)
+TAIPY_RELOADER = env_bool("MAYA_TAIPY_RELOADER", default=True)
 
 
 def request_headers():
@@ -20,20 +61,20 @@ def get_stats():
     try:
         response = requests.get(
             f"{API_BASE}/api/stats",
-            timeout=2,
+            timeout=REQUEST_TIMEOUT_SECS,
             headers=request_headers(),
         )
         response.raise_for_status()
-        return response.json()
+        return response.json(), True
     except Exception:
         return {
-            "active_decoys": 512,
-            "active_sessions": 8,
-            "trapped_attackers": 8,
-            "malware_captured": 142,
-            "scans_detected": 2_400_000,
-            "alerts_generated": 31,
-        }
+            "active_decoys": None,
+            "active_sessions": None,
+            "trapped_attackers": None,
+            "malware_captured": None,
+            "scans_detected": None,
+            "alerts_generated": None,
+        }, False
 
 
 def seed_series():
@@ -43,36 +84,44 @@ def seed_series():
 
 
 def make_breakdown(stats):
+    metrics = [
+        ("Active Decoys", stats["active_decoys"]),
+        ("Active Sessions", stats["active_sessions"]),
+        ("Trapped Attackers", stats["trapped_attackers"]),
+        ("Malware Captured", stats["malware_captured"]),
+        ("Alerts", stats["alerts_generated"]),
+    ]
+
+    rows = [metric for metric in metrics if metric[1] is not None]
+
+    if not rows:
+        return pd.DataFrame({"metric": [], "value": []})
+
     return pd.DataFrame(
         {
-            "metric": [
-                "Active Decoys",
-                "Active Sessions",
-                "Trapped Attackers",
-                "Malware Captured",
-                "Alerts",
-            ],
-            "value": [
-                stats["active_decoys"],
-                stats["active_sessions"],
-                stats["trapped_attackers"],
-                stats["malware_captured"],
-                stats["alerts_generated"],
-            ],
+            "metric": [label for label, _ in rows],
+            "value": [value for _, value in rows],
         }
     )
 
 
-stats = get_stats()
+def display_counter(value):
+    if value is None:
+        return "Data unavailable"
+    return value
+
+
+stats, backend_available = get_stats()
 attack_df = seed_series()
 breakdown_df = make_breakdown(stats)
 
-active_decoys = stats["active_decoys"]
-active_sessions = stats["active_sessions"]
-trapped_attackers = stats["trapped_attackers"]
-malware_captured = stats["malware_captured"]
-scans_detected = stats["scans_detected"]
-alerts_generated = stats["alerts_generated"]
+active_decoys = display_counter(stats["active_decoys"])
+active_sessions = display_counter(stats["active_sessions"])
+trapped_attackers = display_counter(stats["trapped_attackers"])
+malware_captured = display_counter(stats["malware_captured"])
+scans_detected = display_counter(stats["scans_detected"])
+alerts_generated = display_counter(stats["alerts_generated"])
+backend_status = "Connected" if backend_available else "Data unavailable (backend unreachable)"
 last_refresh = datetime.utcnow().strftime("%H:%M:%S UTC")
 
 
@@ -94,22 +143,25 @@ page = """
 <|layout|columns=1 1 1|
 <|{scans_detected}|text|label=Total Scans Detected|>
 <|{alerts_generated}|text|label=Alerts Generated|>
-<|{last_refresh}|text|label=Last Refresh|>
+<|{backend_status}|text|label=Backend Status|>
 |>
+
+<|{last_refresh}|text|label=Last Refresh|>
 
 <|Refresh from MAYA API|button|on_action=refresh_data|>
 """
 
 
 def refresh_data(state):
-    latest = get_stats()
+    latest, available = get_stats()
 
-    state.active_decoys = latest["active_decoys"]
-    state.active_sessions = latest["active_sessions"]
-    state.trapped_attackers = latest["trapped_attackers"]
-    state.malware_captured = latest["malware_captured"]
-    state.scans_detected = latest["scans_detected"]
-    state.alerts_generated = latest["alerts_generated"]
+    state.active_decoys = display_counter(latest["active_decoys"])
+    state.active_sessions = display_counter(latest["active_sessions"])
+    state.trapped_attackers = display_counter(latest["trapped_attackers"])
+    state.malware_captured = display_counter(latest["malware_captured"])
+    state.scans_detected = display_counter(latest["scans_detected"])
+    state.alerts_generated = display_counter(latest["alerts_generated"])
+    state.backend_status = "Connected" if available else "Data unavailable (backend unreachable)"
 
     jitter = random.randint(-8, 10)
     updated_series = attack_df.copy()
@@ -123,4 +175,10 @@ def refresh_data(state):
 
 
 if __name__ == "__main__":
-    Gui(page=page).run(title="MAYA Taipy Dashboard", dark_mode=True, use_reloader=True)
+    Gui(page=page).run(
+        title="MAYA Taipy Dashboard",
+        dark_mode=TAIPY_DARK_MODE,
+        use_reloader=TAIPY_RELOADER,
+        host=TAIPY_HOST,
+        port=TAIPY_PORT,
+    )

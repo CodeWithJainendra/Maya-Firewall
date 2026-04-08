@@ -87,7 +87,24 @@ cargo build --release
 
 # Start SOC Dashboard
 ./target/release/maya dashboard --port 8900
+
+# Start Taipy SOC view (standardized env launcher)
+./scripts/run-taipy-dashboard.sh
 ```
+
+### Taipy deployment environment standard
+
+Use these env variables across local/dev/prod for the Taipy UI:
+
+- `MAYA_TAIPY_API_BASE` (default `http://127.0.0.1:8900`)
+- `MAYA_TAIPY_DASHBOARD_TOKEN` (optional dashboard token)
+- `MAYA_TAIPY_REQUEST_TIMEOUT_SECS` (default `2.0`)
+- `MAYA_TAIPY_HOST` (default `127.0.0.1`)
+- `MAYA_TAIPY_PORT` (default `5000`)
+- `MAYA_TAIPY_DARK_MODE` (default `true`)
+- `MAYA_TAIPY_RELOADER` (default `true`)
+
+Backward-compatible aliases are still accepted: `MAYA_API_BASE`, `MAYA_DASHBOARD_TOKEN`.
 
 ## 📁 Project Structure
 
