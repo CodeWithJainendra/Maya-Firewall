@@ -82,7 +82,7 @@ pub async fn login(
 ) -> Result<impl IntoResponse, StatusCode> {
     let expected = state.auth_token.as_deref().ok_or(StatusCode::NOT_FOUND)?;
 
-    if payload.token != expected {
+    if !constant_time_eq(&payload.token, expected) {
         warn!("Rejected dashboard login attempt");
         return Err(StatusCode::UNAUTHORIZED);
     }
@@ -222,12 +222,32 @@ fn authorize_request(
         .or_else(|| header_token(headers, "x-maya-dashboard-token"));
 
     match supplied {
-        Some(token) if token == expected => Ok(()),
+        Some(token) if constant_time_eq(&token, expected) => Ok(()),
         _ => {
             warn!("Rejected unauthorized dashboard API/WS request");
             Err(StatusCode::UNAUTHORIZED)
         }
     }
+}
+
+/// Compare two secrets without leaking the expected token byte-by-byte through
+/// response-timing.
+///
+/// Both inputs are HMAC'd under a process-random key and the fixed-length tags
+/// are compared with `ring`'s constant-time HMAC verification. Because the tags
+/// are always 32 bytes, neither the length nor the contents of the secret leak
+/// through timing, and the random key prevents any offline precomputation.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    use std::sync::OnceLock;
+
+    static KEY: OnceLock<hmac::Key> = OnceLock::new();
+    let key = KEY.get_or_init(|| {
+        let rng = ring::rand::SystemRandom::new();
+        hmac::Key::generate(hmac::HMAC_SHA256, &rng).expect("hmac key generation should succeed")
+    });
+
+    let tag_a = hmac::sign(key, a.as_bytes());
+    hmac::verify(key, b.as_bytes(), tag_a.as_ref()).is_ok()
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<String> {
@@ -350,4 +370,20 @@ fn sign_session(auth_token: &str) -> hmac::Key {
     seed.extend_from_slice(auth_token.as_bytes());
     seed.extend_from_slice(b":maya-dashboard-session:v1");
     hmac::Key::new(hmac::HMAC_SHA256, &seed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::constant_time_eq;
+
+    #[test]
+    fn constant_time_eq_matches_only_identical_tokens() {
+        assert!(constant_time_eq("s3cr3t-token", "s3cr3t-token"));
+        // Differing content of equal length is rejected.
+        assert!(!constant_time_eq("s3cr3t-token", "s3cr3t-toakn"));
+        // Differing length is rejected.
+        assert!(!constant_time_eq("s3cr3t-token", "s3cr3t-token-extra"));
+        assert!(!constant_time_eq("", "x"));
+        assert!(constant_time_eq("", ""));
+    }
 }

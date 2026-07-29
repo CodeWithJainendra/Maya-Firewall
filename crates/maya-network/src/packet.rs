@@ -187,8 +187,13 @@ impl ParsedPacket {
         let source_ip = Some(IpAddr::V4(ip.src_addr));
         let dest_ip = Some(IpAddr::V4(ip.dst_addr));
 
-        // Parse TCP header (protocol 6)
-        let tcp = if ip.protocol == 6 && data.len() >= ip_start + ihl + 20 {
+        // Parse TCP header (protocol 6).
+        //
+        // Require a well-formed IPv4 header length (IHL >= 5, i.e. >= 20 bytes).
+        // A crafted packet with IHL < 5 would otherwise place `tcp_start` inside
+        // the IPv4/Ethernet header, so garbage bytes would be parsed as the
+        // TCP ports/flags and fed into scan detection as attacker-chosen values.
+        let tcp = if ip.protocol == 6 && ihl >= 20 && data.len() >= ip_start + ihl + 20 {
             let tcp_start = ip_start + ihl;
             let flags_byte = data[tcp_start + 13];
             Some(TcpHeader {
@@ -241,5 +246,65 @@ impl ParsedPacket {
             source_port,
             dest_port,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn raw(data: Vec<u8>) -> RawPacket {
+        RawPacket {
+            data: Bytes::from(data),
+            timestamp_ns: 0,
+            ifindex: 0,
+            direction: PacketDirection::Ingress,
+        }
+    }
+
+    /// Build an Ethernet+IPv4(+TCP) frame with the given IPv4 IHL nibble.
+    fn frame_with_ihl(ihl_nibble: u8) -> Vec<u8> {
+        let mut d = vec![0u8; 54];
+        // Ethernet ethertype = IPv4
+        d[12] = 0x08;
+        d[13] = 0x00;
+        // IPv4 version (4) + IHL nibble
+        d[14] = (4 << 4) | (ihl_nibble & 0x0F);
+        // protocol = TCP (6) at ip_start + 9
+        d[23] = 6;
+        // TCP header assuming a well-formed 20-byte IPv4 header (tcp_start = 34)
+        d[34] = 0x12; // src_port high
+        d[35] = 0x34; // src_port low  => 0x1234
+        d[36] = 0x00; // dst_port high
+        d[37] = 0x50; // dst_port low  => 80
+        d[46] = 0x50; // data_offset = 5 (<<4)
+        d[47] = 0x02; // flags = SYN
+        d
+    }
+
+    #[test]
+    fn well_formed_tcp_packet_parses_ports() {
+        let packet = ParsedPacket::parse(&raw(frame_with_ihl(5))).expect("should parse");
+        let tcp = packet.tcp.expect("TCP header expected");
+        assert_eq!(tcp.src_port, 0x1234);
+        assert_eq!(tcp.dst_port, 80);
+        assert!(tcp.flags.syn);
+    }
+
+    #[test]
+    fn malformed_ihl_does_not_parse_tcp_from_ip_header() {
+        // IHL = 4 (16 bytes) is below the 20-byte minimum. The TCP header must
+        // not be parsed, otherwise bytes inside the IPv4 header would be read as
+        // attacker-chosen ports/flags and fed to scan detection.
+        for bad_ihl in [0u8, 1, 4] {
+            let packet = ParsedPacket::parse(&raw(frame_with_ihl(bad_ihl)))
+                .expect("IP header should still parse");
+            assert!(
+                packet.tcp.is_none(),
+                "TCP must not parse for IHL={bad_ihl}"
+            );
+            assert!(packet.source_port.is_none());
+            assert!(packet.dest_port.is_none());
+        }
     }
 }

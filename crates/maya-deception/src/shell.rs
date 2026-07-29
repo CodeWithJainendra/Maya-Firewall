@@ -62,6 +62,21 @@ impl GhostShell {
         if parts.is_empty() {
             return Ok(String::new());
         }
+        // Strip any leading `sudo` tokens iteratively. Recursing once per
+        // `sudo` (as `sudo ... => self.execute(...)` did) meant an attacker
+        // input like `sudo sudo sudo ... whoami` built a deeply nested chain of
+        // boxed futures (risking stack overflow when polled) and did O(n²) work
+        // re-joining the argument list at each level.
+        let mut idx = 0;
+        while parts.get(idx) == Some(&"sudo") {
+            idx += 1;
+        }
+        if idx >= parts.len() {
+            // Bare `sudo` with no following command.
+            return Ok(String::new());
+        }
+        let parts = &parts[idx..];
+
         let cmd = parts[0];
         let args = &parts[1..];
 
@@ -95,7 +110,6 @@ impl GhostShell {
             "sqlite3" => Ok(self.cmd_sqlite3(args)),
             "exit" | "logout" => Ok("logout\n".into()),
             "clear" => Ok("\x1b[2J\x1b[H".into()),
-            "sudo" if !args.is_empty() => Box::pin(self.execute(&args.join(" "))).await,
             _ => Ok(format!("-bash: {cmd}: command not found\n")),
         }
     }
@@ -256,5 +270,44 @@ impl GhostShell {
          Mem:       16384000     8847232     2156800      524288     5379968     6912000\n\
          Swap:       4194304           0     4194304\n"
             .into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shell() -> GhostShell {
+        GhostShell::new(
+            SessionId::new(),
+            "victim.corp.local".into(),
+            DecoyType::LinuxServer,
+            Arc::new(FakeDataGenerator::new()),
+            Arc::new(FilesystemGenerator::new()),
+        )
+    }
+
+    #[tokio::test]
+    async fn sudo_prefix_is_stripped_and_command_runs() {
+        let sh = shell();
+        assert_eq!(sh.execute("sudo whoami").await.unwrap(), "root\n");
+        assert_eq!(sh.execute("sudo sudo whoami").await.unwrap(), "root\n");
+    }
+
+    #[tokio::test]
+    async fn bare_sudo_returns_empty() {
+        let sh = shell();
+        assert_eq!(sh.execute("sudo").await.unwrap(), "");
+        assert_eq!(sh.execute("sudo sudo").await.unwrap(), "");
+    }
+
+    #[tokio::test]
+    async fn many_sudo_prefixes_do_not_overflow_the_stack() {
+        // Regression: the old implementation recursed once per leading `sudo`,
+        // so a long run of them built a deeply nested future chain that could
+        // overflow the stack when polled. Now they are stripped iteratively.
+        let sh = shell();
+        let cmd = format!("{}whoami", "sudo ".repeat(50_000));
+        assert_eq!(sh.execute(&cmd).await.unwrap(), "root\n");
     }
 }
