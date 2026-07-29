@@ -188,11 +188,18 @@ async fn cmd_start(dev: bool, config_path: &Path) -> Result<()> {
     let _keys = key_mgr.generate_identity()?;
 
     // 6. Consensus
+    let peer_ids: Vec<String> = config
+        .consensus
+        .peers
+        .iter()
+        .map(|p| p.node_id.clone())
+        .collect();
     let _consensus = HotStuffEngine::new(
         &config.system.node_id,
         config.consensus.quorum_size,
         config.consensus.peers.len() as u32 + 1,
-    );
+    )
+    .with_peers(peer_ids);
 
     // 7. Profiler
     let _profiler = BehaviorAnalyzer::new(config.profiler.attribution_threshold);
