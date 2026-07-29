@@ -11,6 +11,15 @@ use std::time::Duration;
 
 use maya_core::types::ScanType;
 
+/// Upper bound on the number of individual probe records retained per source IP.
+///
+/// Without this cap, a single source flooding probes within the detection
+/// window grows `ports_probed` without limit and forces an O(n log n)
+/// sort/dedup on every packet — an O(n^2) CPU + unbounded-memory DoS. The cap
+/// is far larger than any realistic unique-port threshold, so genuine scans are
+/// still detected while a flood is bounded to the most recent probes.
+const MAX_TRACKED_PROBES: usize = 4096;
+
 /// Tracks scan activity from a single source IP.
 #[derive(Debug)]
 pub struct ScanTracker {
@@ -87,6 +96,14 @@ impl ScanDetector {
         // Prune old entries outside the window
         tracker.ports_probed.retain(|(_, ts)| *ts > cutoff);
 
+        // Bound memory/CPU: keep only the most recent probes. This prevents a
+        // single-source flood from growing the buffer without limit (and turning
+        // the per-packet sort/dedup below into an O(n^2) hot path).
+        if tracker.ports_probed.len() > MAX_TRACKED_PROBES {
+            let excess = tracker.ports_probed.len() - MAX_TRACKED_PROBES;
+            tracker.ports_probed.drain(0..excess);
+        }
+
         // Count unique ports
         let mut unique_ports: Vec<u16> = tracker.ports_probed.iter().map(|(p, _)| *p).collect();
         unique_ports.sort();
@@ -141,6 +158,15 @@ impl ScanDetector {
     /// Get active tracker count.
     pub fn active_trackers(&self) -> usize {
         self.trackers.len()
+    }
+
+    /// Number of individual probe records currently retained for a source IP.
+    /// Exposed for observability and to assert the retention bound in tests.
+    pub fn tracked_probe_count(&self, source_ip: &IpAddr) -> usize {
+        self.trackers
+            .get(source_ip)
+            .map(|tracker| tracker.ports_probed.len())
+            .unwrap_or(0)
     }
 }
 
@@ -199,4 +225,44 @@ fn classify_scan_threat(
     }
 
     ThreatClass::LowThreat
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    #[test]
+    fn probe_history_is_bounded_under_single_source_flood() {
+        let detector = ScanDetector::new(5, 60);
+        let attacker = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7));
+
+        // Flood far more probes than the cap, all to the same port and all
+        // within the detection window.
+        for _ in 0..(MAX_TRACKED_PROBES * 8) {
+            detector.record_probe(attacker, 80, None);
+        }
+
+        assert!(
+            detector.tracked_probe_count(&attacker) <= MAX_TRACKED_PROBES,
+            "probe history must stay bounded, got {}",
+            detector.tracked_probe_count(&attacker)
+        );
+    }
+
+    #[test]
+    fn genuine_multi_port_scan_is_still_detected() {
+        let detector = ScanDetector::new(5, 60);
+        let attacker = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 9));
+
+        let mut detected = None;
+        for port in 1000..1006u16 {
+            if let Some(d) = detector.record_probe(attacker, port, None) {
+                detected = Some(d);
+            }
+        }
+
+        let detection = detected.expect("scan across 6 unique ports should trigger");
+        assert!(detection.unique_ports_scanned >= 5);
+    }
 }

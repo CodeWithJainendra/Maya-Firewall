@@ -34,10 +34,22 @@ impl HybridCrypto {
     ) -> Vec<u8> {
         let mut hasher = Sha256::new();
         hasher.update(b"MAYA-HYBRID-KDF-v1");
+
+        // Length-prefix each input so distinct (classical, pq) pairs cannot map
+        // to the same hash input. Plain concatenation is ambiguous — e.g.
+        // (classical="ab", pq=None) and (classical="a", pq=Some("b")) would
+        // otherwise produce identical secrets, breaking the injective binding a
+        // hybrid KEM combiner requires.
+        hasher.update((classical_shared.len() as u64).to_le_bytes());
         hasher.update(classical_shared);
 
-        if let Some(pq) = pq_shared {
-            hasher.update(pq);
+        match pq_shared {
+            Some(pq) => {
+                hasher.update([1u8]);
+                hasher.update((pq.len() as u64).to_le_bytes());
+                hasher.update(pq);
+            }
+            None => hasher.update([0u8]),
         }
 
         hasher.finalize().to_vec()
@@ -180,5 +192,20 @@ mod tests {
         let a = crypto.derive_hybrid_secret(b"a", Some(b"b"));
         let b = crypto.derive_hybrid_secret(b"a", Some(b"c"));
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn test_derive_hybrid_secret_is_unambiguous_across_boundary() {
+        // Distinct logical inputs that share the same concatenation must not
+        // collide: (classical="ab", pq=None) vs (classical="a", pq=Some("b")).
+        let crypto = HybridCrypto::new(true);
+        let merged = crypto.derive_hybrid_secret(b"ab", None);
+        let split = crypto.derive_hybrid_secret(b"a", Some(b"b"));
+        assert_ne!(merged, split);
+
+        // An empty PQ secret must also differ from an absent one.
+        let empty_pq = crypto.derive_hybrid_secret(b"a", Some(b""));
+        let absent_pq = crypto.derive_hybrid_secret(b"a", None);
+        assert_ne!(empty_pq, absent_pq);
     }
 }
