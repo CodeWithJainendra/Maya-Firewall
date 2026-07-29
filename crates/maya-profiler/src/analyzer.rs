@@ -145,24 +145,28 @@ impl BehaviorAnalyzer {
             let mut evidence = Vec::new();
             let mut matching_ttps = Vec::new();
 
-            // Command pattern matching (40% weight)
-            let cmd_matches: Vec<_> = commands
+            // Command pattern matching (40% weight).
+            //
+            // Score on the number of *distinct signature commands* observed, not
+            // the raw number of attacker commands that matched. Counting raw
+            // matches let an attacker repeat a single command (e.g. `whoami`)
+            // to drive `cmd_score` above 1.0, which inflated the final
+            // confidence past 100% (and produced nonsensical "N of M" evidence).
+            let matched_commands: Vec<&String> = sig
+                .typical_commands
                 .iter()
-                .filter(|cmd| {
-                    sig.typical_commands
-                        .iter()
-                        .any(|tc| cmd.contains(tc.as_str()))
-                })
+                .filter(|tc| commands.iter().any(|cmd| cmd.contains(tc.as_str())))
                 .collect();
-            if !cmd_matches.is_empty() {
-                let cmd_score = cmd_matches.len() as f64 / sig.typical_commands.len().max(1) as f64;
+            if !matched_commands.is_empty() {
+                let cmd_score =
+                    matched_commands.len() as f64 / sig.typical_commands.len().max(1) as f64;
                 score += cmd_score * 0.4;
                 evidence.push(format!(
                     "Command pattern match: {} of {} commands",
-                    cmd_matches.len(),
+                    matched_commands.len(),
                     sig.typical_commands.len()
                 ));
-                for m in &cmd_matches {
+                for m in &matched_commands {
                     matching_ttps.push(format!("T1059: Command-Line Interface ({})", m));
                 }
             }
@@ -181,14 +185,24 @@ impl BehaviorAnalyzer {
             if let Some(ref ks) = keystrokes
                 && ks.len() > 5
             {
-                let avg_delay: f64 = ks
+                // Average only over keystrokes that actually carry an
+                // inter-key delay. Dividing the sum of present delays by the
+                // total keystroke count (which always includes at least the
+                // first keystroke, whose delay is `None`) systematically
+                // under-reported the rhythm and skewed the match.
+                let delays: Vec<f64> = ks
                     .iter()
                     .filter_map(|k| k.inter_key_delay_ms)
                     .map(|d| d as f64)
-                    .sum::<f64>()
-                    / ks.len() as f64;
+                    .collect();
+                let avg_delay = if delays.is_empty() {
+                    0.0
+                } else {
+                    delays.iter().sum::<f64>() / delays.len() as f64
+                };
 
-                if avg_delay >= sig.avg_keystroke_interval.0
+                if !delays.is_empty()
+                    && avg_delay >= sig.avg_keystroke_interval.0
                     && avg_delay <= sig.avg_keystroke_interval.1
                 {
                     score += 0.2;
@@ -240,3 +254,78 @@ impl BehaviorAnalyzer {
 }
 
 use chrono::Timelike;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ks(delay: Option<u64>) -> KeystrokeEvent {
+        KeystrokeEvent {
+            timestamp_ms: 0,
+            inter_key_delay_ms: delay,
+            key_hold_ms: 10,
+        }
+    }
+
+    #[test]
+    fn confidence_never_exceeds_one_when_command_repeated() {
+        // Regression: repeating a single matching command must not push the
+        // confidence above 1.0 (100%). Threshold set low so attribution fires.
+        let analyzer = BehaviorAnalyzer::new(0.1);
+        let session = SessionId::new();
+
+        // APT41 has 4 typical commands; run just one of them 100 times.
+        for _ in 0..100 {
+            analyzer.record_command(&session, "whoami".to_string());
+        }
+
+        let result = analyzer
+            .attempt_attribution(&session)
+            .expect("attribution should fire above threshold");
+
+        assert!(
+            result.confidence <= 1.0,
+            "confidence must be <= 1.0 (100%), got {}",
+            result.confidence
+        );
+        // 1 of 4 signature commands matched => command weight 0.25 * 0.4 = 0.1.
+        assert!(result.confidence >= 0.1);
+    }
+
+    #[test]
+    fn keystroke_average_uses_only_present_delays() {
+        // Regression: the average must be taken over keystrokes that carry a
+        // delay, not over the total keystroke count. Here 5 keystrokes have no
+        // delay and 5 have a 100ms delay -> present-average is 100ms (inside
+        // APT41's 80-150ms band). The old code divided by 10 -> 50ms, which is
+        // outside the band, so the rhythm match was wrongly dropped.
+        let analyzer = BehaviorAnalyzer::new(0.1);
+        let session = SessionId::new();
+
+        // Match all four APT41 commands so it is unambiguously the best match.
+        for cmd in ["whoami", "net user", "tasklist", "systeminfo"] {
+            analyzer.record_command(&session, cmd.to_string());
+        }
+        for _ in 0..5 {
+            analyzer.record_keystroke(&session, ks(None));
+        }
+        for _ in 0..5 {
+            analyzer.record_keystroke(&session, ks(Some(100)));
+        }
+
+        let result = analyzer
+            .attempt_attribution(&session)
+            .expect("attribution should fire");
+
+        assert!(result.group_name.contains("APT41"));
+        assert!(
+            result
+                .evidence
+                .iter()
+                .any(|e| e.contains("Keystroke rhythm match")),
+            "expected keystroke rhythm match in evidence, got {:?}",
+            result.evidence
+        );
+        assert!(result.confidence <= 1.0);
+    }
+}

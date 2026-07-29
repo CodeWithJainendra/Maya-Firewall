@@ -44,7 +44,7 @@ pub struct DeceptionOrchestrator {
     /// Filesystem generator
     fs_gen: Arc<FilesystemGenerator>,
     /// Ghost shells (AI-powered fake terminals)
-    shells: Arc<DashMap<SessionId, GhostShell>>,
+    shells: Arc<DashMap<SessionId, Arc<GhostShell>>>,
     /// Session to decoy mapping for richer event metadata
     session_decoys: Arc<DashMap<SessionId, DecoyId>>,
     /// Event bus
@@ -96,8 +96,20 @@ impl DeceptionOrchestrator {
                 "⚠️  Decoy limit reached: {}/{}",
                 current, self.config.max_decoys
             );
-            // Evict oldest inactive decoy
+            // Try to make room by evicting the oldest *idle* decoy.
             self.evict_oldest().await;
+
+            // `evict_oldest` only removes a decoy with no active sessions, so it
+            // can be a no-op when every decoy is busy. Refuse to spawn rather
+            // than blowing past the cap — otherwise an attacker who keeps
+            // sessions alive could force unbounded container creation.
+            if self.decoys.len() as u32 >= self.config.max_decoys {
+                return Err(anyhow::anyhow!(
+                    "decoy capacity reached ({}/{}); refusing to spawn",
+                    self.decoys.len(),
+                    self.config.max_decoys
+                ));
+            }
         }
 
         let decoy_id = DecoyId::new();
@@ -274,7 +286,7 @@ impl DeceptionOrchestrator {
             self.fs_gen.clone(),
         );
 
-        self.shells.insert(session_id.clone(), shell);
+        self.shells.insert(session_id.clone(), Arc::new(shell));
         self.session_decoys
             .insert(session_id.clone(), decoy_id.clone());
 
@@ -288,10 +300,17 @@ impl DeceptionOrchestrator {
     /// Process a command from an attacker in a Ghost Shell.
     /// Returns the fake response.
     pub async fn process_command(&self, session_id: &SessionId, command: &str) -> Result<String> {
-        let shell = self
-            .shells
-            .get(session_id)
-            .ok_or_else(|| anyhow::anyhow!("No shell for session: {}", session_id))?;
+        // Clone the `Arc` out and drop the DashMap guard *before* awaiting, so
+        // the shard's lock is not held across `.await` (which would block any
+        // concurrent insert/get for a session hashing to the same shard, and is
+        // a latent deadlock if `execute` ever touches `self.shells`).
+        let shell = {
+            let guard = self
+                .shells
+                .get(session_id)
+                .ok_or_else(|| anyhow::anyhow!("No shell for session: {}", session_id))?;
+            Arc::clone(guard.value())
+        };
 
         let response = shell.execute(command).await?;
 
@@ -532,5 +551,39 @@ mod tests {
         let pool = Ipv4Pool::from_cidr("10.13.37.42/32").expect("pool parse");
         assert_eq!(pool.capacity, 1);
         assert_eq!(pool.next_ip(0), IpAddr::V4(Ipv4Addr::new(10, 13, 37, 42)));
+    }
+
+    fn test_config(max_decoys: u32) -> DeceptionConfig {
+        DeceptionConfig {
+            max_decoys,
+            container_runtime: "docker".into(),
+            base_images: vec!["alpine:latest".into()],
+            auto_spawn: true,
+            decoy_ttl_secs: 3600,
+            spawn_budget_ms: 100,
+            fake_data_seed: Some(1),
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_decoy_refuses_when_at_capacity() {
+        // Regression: with the cap already reached and nothing evictable, the
+        // orchestrator must return an error instead of spawning another
+        // container. max_decoys = 0 exercises the guard without touching Docker.
+        let orchestrator = DeceptionOrchestrator::new(
+            test_config(0),
+            "10.13.37.0/24".to_string(),
+            Arc::new(EventBus::new()),
+        );
+
+        let result = orchestrator
+            .spawn_decoy(DecoyType::LinuxServer, EngagementLevel::Low, vec![22])
+            .await;
+
+        assert!(
+            result.is_err(),
+            "spawn_decoy must refuse to exceed max_decoys"
+        );
+        assert_eq!(orchestrator.active_decoy_count(), 0);
     }
 }
