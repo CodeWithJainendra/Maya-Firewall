@@ -98,10 +98,12 @@ impl TcpFlags {
             Some(ScanType::SynScan)
         } else if self.ack && !self.syn {
             Some(ScanType::AckScan)
+        } else if self.fin && self.psh && self.urg {
+            // Xmas must be checked before the generic FIN case, otherwise a
+            // FIN+PSH+URG packet matches `FinScan` first and Xmas is never reported.
+            Some(ScanType::XmasScan)
         } else if self.fin && !self.syn && !self.ack {
             Some(ScanType::FinScan)
-        } else if self.fin && self.psh && self.urg {
-            Some(ScanType::XmasScan)
         } else if !self.fin && !self.syn && !self.rst && !self.psh && !self.ack && !self.urg {
             Some(ScanType::NullScan)
         } else {
@@ -241,5 +243,46 @@ impl ParsedPacket {
             source_port,
             dest_port,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use maya_core::types::ScanType;
+
+    fn flags(fin: bool, syn: bool, rst: bool, psh: bool, ack: bool, urg: bool) -> TcpFlags {
+        TcpFlags {
+            fin,
+            syn,
+            rst,
+            psh,
+            ack,
+            urg,
+            ece: false,
+            cwr: false,
+        }
+    }
+
+    #[test]
+    fn xmas_scan_is_not_misclassified_as_fin() {
+        // FIN + PSH + URG is the classic Xmas scan and must report XmasScan,
+        // not FinScan.
+        let xmas = flags(true, false, false, true, false, true);
+        assert_eq!(xmas.scan_type(), Some(ScanType::XmasScan));
+    }
+
+    #[test]
+    fn pure_fin_still_reports_fin_scan() {
+        let fin = flags(true, false, false, false, false, false);
+        assert_eq!(fin.scan_type(), Some(ScanType::FinScan));
+    }
+
+    #[test]
+    fn null_and_syn_scans_still_classify() {
+        let null = flags(false, false, false, false, false, false);
+        assert_eq!(null.scan_type(), Some(ScanType::NullScan));
+        let syn = flags(false, true, false, false, false, false);
+        assert_eq!(syn.scan_type(), Some(ScanType::SynScan));
     }
 }
